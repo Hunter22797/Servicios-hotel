@@ -1,0 +1,598 @@
+from abc import ABC, abstractmethod
+from datetime import datetime
+import logging
+import re
+
+logging.basicConfig(
+    filename="sistema.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    encoding="utf-8"
+)
+
+logger = logging.getLogger("SistemaReservas")
+
+
+# Excepciones
+
+
+class SistemaError(Exception):
+    """Excepción general del sistema."""
+    pass
+
+
+class DatosInvalidosError(SistemaError):
+    pass
+
+
+class ClienteNoValidoError(SistemaError):
+    pass
+
+
+class ServicioNoDisponibleError(SistemaError):
+    pass
+
+
+class ReservaError(SistemaError):
+    pass
+
+
+class OperacionNoPermitidaError(SistemaError):
+    pass
+
+
+class CalculoError(SistemaError):
+    pass
+
+
+class Entidad(ABC):
+
+    def __init__(self, identificador):
+        if not identificador:
+            raise DatosInvalidosError(
+                "El identificador es obligatorio."
+            )
+
+        self._identificador = identificador
+
+    @property
+    def identificador(self):
+        return self._identificador
+
+    @abstractmethod
+    def mostrar_informacion(self):
+        pass
+
+# Clientes
+
+
+class Cliente(Entidad):
+
+    def __init__(self, identificador, nombre, correo, telefono):
+
+        super().__init__(identificador)
+
+        try:
+            if not nombre or len(nombre.strip()) < 3:
+                raise ValueError("Nombre demasiado corto.")
+
+            if not re.match(
+                r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
+                correo
+            ):
+                raise ValueError("Correo electrónico inválido.")
+
+            if not telefono.isdigit() or len(telefono) < 7:
+                raise ValueError("Teléfono inválido.")
+
+        except ValueError as error:
+            logger.error("Error validando cliente: %s", error)
+
+            raise ClienteNoValidoError(
+                "No fue posible registrar el cliente."
+            ) from error
+
+        self.__nombre = nombre.strip()
+        self.__correo = correo
+        self.__telefono = telefono
+
+        logger.info("Cliente registrado: %s", identificador)
+
+    @property
+    def nombre(self):
+        return self.__nombre
+
+    @property
+    def correo(self):
+        return self.__correo
+
+    def mostrar_informacion(self):
+        return (
+            f"Cliente: {self.__nombre} | "
+            f"Correo: {self.__correo} | "
+            f"Teléfono: {self.__telefono}"
+        )
+
+# Clase abstracta de servicio
+
+class Servicio(ABC):
+
+    def __init__(self, codigo, nombre, tarifa, disponible=True):
+
+        if tarifa <= 0:
+            raise DatosInvalidosError(
+                "La tarifa debe ser mayor que cero."
+            )
+
+        self.codigo = codigo
+        self.nombre = nombre
+        self.tarifa = tarifa
+        self.disponible = disponible
+
+    @abstractmethod
+    def calcular_costo(self, duracion, impuesto=0, descuento=0):
+        pass
+
+    @abstractmethod
+    def describir_servicio(self):
+        pass
+
+    @abstractmethod
+    def validar_parametros(self, duracion):
+        pass
+
+# Servicio de alojamiento
+
+class Alojamiento(Servicio):
+
+    def validar_parametros(self, duracion):
+
+        if not isinstance(duracion, int) or duracion <= 0:
+            raise DatosInvalidosError(
+                "Las noches deben ser un entero positivo."
+            )
+
+    def calcular_costo(self, duracion, impuesto=0, descuento=0):
+
+        self.validar_parametros(duracion)
+
+        if not 0 <= impuesto <= 100:
+            raise CalculoError("Impuesto inválido.")
+
+        if not 0 <= descuento <= 100:
+            raise CalculoError("Descuento inválido.")
+
+        subtotal = self.tarifa * duracion
+        total = subtotal + subtotal * impuesto / 100
+        total -= subtotal * descuento / 100
+
+        return round(total, 2)
+
+    def describir_servicio(self):
+        return f"Alojamiento: {self.nombre}"
+
+# Transporte
+
+class Transporte(Servicio):
+
+    def validar_parametros(self, duracion):
+
+        if not isinstance(duracion, (int, float)) or duracion <= 0:
+            raise DatosInvalidosError(
+                "La distancia debe ser positiva."
+            )
+
+    def calcular_costo(self, duracion, impuesto=0, descuento=0):
+
+        self.validar_parametros(duracion)
+
+        if not 0 <= impuesto <= 100 or not 0 <= descuento <= 100:
+            raise CalculoError("Impuestos o descuentos inválidos.")
+
+        subtotal = self.tarifa * duracion
+        total = subtotal * (1 + impuesto / 100)
+        total -= subtotal * descuento / 100
+
+        return round(total, 2)
+
+    def describir_servicio(self):
+        return f"Transporte: {self.nombre}"
+
+
+# Alimentacion
+
+
+class Alimentacion(Servicio):
+
+    def validar_parametros(self, duracion):
+
+        if not isinstance(duracion, int) or duracion <= 0:
+            raise DatosInvalidosError(
+                "La cantidad de comidas debe ser positiva."
+            )
+
+    def calcular_costo(self, duracion, impuesto=0, descuento=0):
+
+        self.validar_parametros(duracion)
+
+        if not 0 <= impuesto <= 100 or not 0 <= descuento <= 100:
+            raise CalculoError("Porcentajes inválidos.")
+
+        subtotal = self.tarifa * duracion
+        total = subtotal + subtotal * impuesto / 100
+        total -= subtotal * descuento / 100
+
+        return round(total, 2)
+
+    def describir_servicio(self):
+        return f"Alimentación: {self.nombre}"
+
+
+# Reserva
+
+class Reserva(Entidad):
+
+    def __init__(self, identificador, cliente, servicio, duracion):
+
+        super().__init__(identificador)
+
+        if not isinstance(cliente, Cliente):
+            raise ReservaError("Cliente no válido.")
+
+        if not isinstance(servicio, Servicio):
+            raise ReservaError("Servicio no válido.")
+
+        servicio.validar_parametros(duracion)
+
+        self.cliente = cliente
+        self.servicio = servicio
+        self.duracion = duracion
+        self.estado = "PENDIENTE"
+        self.total = 0
+
+        logger.info("Reserva creada: %s", identificador)
+
+    def confirmar(self):
+
+        if self.estado != "PENDIENTE":
+            raise OperacionNoPermitidaError(
+                "Solo se pueden confirmar reservas pendientes."
+            )
+
+        if not self.servicio.disponible:
+            raise ServicioNoDisponibleError(
+                "El servicio no está disponible."
+            )
+
+        self.estado = "CONFIRMADA"
+
+        logger.info("Reserva confirmada: %s", self.identificador)
+
+    def cancelar(self):
+
+        if self.estado != "PENDIENTE" and self.estado != "CONFIRMADA":
+            raise OperacionNoPermitidaError(
+                "La reserva no se puede cancelar."
+            )
+
+        self.estado = "CANCELADA"
+
+        logger.info("Reserva cancelada: %s", self.identificador)
+
+    def procesar(self, impuesto=0, descuento=0):
+
+        if self.estado != "CONFIRMADA":
+            raise ReservaError(
+                "La reserva debe estar confirmada."
+            )
+
+        try:
+            self.total = self.servicio.calcular_costo(
+                self.duracion,
+                impuesto,
+                descuento
+            )
+
+            if self.total < 0:
+                raise CalculoError("El total no puede ser negativo.")
+
+        except Exception as error:
+
+            logger.exception(
+                "Error procesando reserva %s",
+                self.identificador
+            )
+
+            raise CalculoError(
+                "Error durante el procesamiento de la reserva."
+            ) from error
+
+        else:
+            self.estado = "PROCESADA"
+            logger.info(
+                "Reserva procesada: %s. Total: %.2f",
+                self.identificador,
+                self.total
+            )
+
+        finally:
+            logger.info(
+                "Finalizó el intento de procesamiento: %s",
+                self.identificador
+            )
+
+    def mostrar_informacion(self):
+
+        return (
+            f"Reserva: {self.identificador} | "
+            f"Cliente: {self.cliente.nombre} | "
+            f"Servicio: {self.servicio.nombre} | "
+            f"Estado: {self.estado} | "
+            f"Total: ${self.total}"
+        )
+
+class GestorReservas:
+
+    def __init__(self):
+
+        self.__clientes = []
+        self.__servicios = []
+        self.__reservas = []
+
+    def registrar_cliente(self, cliente):
+
+        if not isinstance(cliente, Cliente):
+            raise ClienteNoValidoError("Objeto cliente incorrecto.")
+
+        if any(c.identificador == cliente.identificador
+               for c in self.__clientes):
+            raise DatosInvalidosError("Cliente duplicado.")
+
+        self.__clientes.append(cliente)
+        logger.info("Cliente agregado al gestor.")
+
+    def agregar_servicio(self, servicio):
+
+        if not isinstance(servicio, Servicio):
+            raise DatosInvalidosError("Servicio inválido.")
+
+        self.__servicios.append(servicio)
+        logger.info("Servicio agregado: %s", servicio.nombre)
+
+    def agregar_reserva(self, reserva):
+
+        if not isinstance(reserva, Reserva):
+            raise ReservaError("Reserva inválida.")
+
+        self.__reservas.append(reserva)
+        logger.info("Reserva agregada al gestor.")
+
+    def mostrar_clientes(self):
+
+        for cliente in self.__clientes:
+            print(cliente.mostrar_informacion())
+
+    def mostrar_servicios(self):
+
+        for servicio in self.__servicios:
+            print(servicio.describir_servicio())
+
+    def mostrar_reservas(self):
+
+        for reserva in self.__reservas:
+            print(reserva.mostrar_informacion())
+
+
+
+# Controlar errores
+
+
+def ejecutar_operacion(descripcion, funcion):
+
+    print(f"\n--- {descripcion} ---")
+
+    try:
+        funcion()
+
+    except SistemaError as error:
+        print(f"Error controlado: {error}")
+        logger.error("%s: %s", descripcion, error)
+
+    except Exception as error:
+        print(f"Error inesperado: {error}")
+        logger.exception("Error inesperado en: %s", descripcion)
+
+    else:
+        print("Operación realizada correctamente.")
+
+    finally:
+        print("Operación finalizada.")
+
+
+
+# Simulacion
+
+
+def main():
+
+    print("=" * 55)
+    print(" SISTEMA DE GESTIÓN DE SERVICIOS Y RESERVAS")
+    print("=" * 55)
+
+    gestor = GestorReservas()
+
+    cliente1 = Cliente(
+        "C001", "Carlos Pérez",
+        "carlos@gmail.com", "3101234567"
+    )
+
+    cliente2 = Cliente(
+        "C002", "María López",
+        "maria@gmail.com", "3201234567"
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 1: Registrar cliente",
+        lambda: gestor.registrar_cliente(cliente1)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 2: Registrar segundo cliente",
+        lambda: gestor.registrar_cliente(cliente2)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 3: Registrar cliente inválido",
+        lambda: Cliente(
+            "C003", "Ana", "correo_invalido", "123"
+        )
+    )
+
+    alojamiento = Alojamiento(
+        "S001", "Hotel Ejecutivo", 150000
+    )
+
+    transporte = Transporte(
+        "S002", "Transporte privado", 5000
+    )
+
+    alimentacion = Alimentacion(
+        "S003", "Alimentación completa", 35000
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 4: Registrar alojamiento",
+        lambda: gestor.agregar_servicio(alojamiento)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 5: Registrar transporte",
+        lambda: gestor.agregar_servicio(transporte)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 6: Registrar alimentación",
+        lambda: gestor.agregar_servicio(alimentacion)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 7: Crear servicio inválido",
+        lambda: Alojamiento(
+            "S004", "Hotel inválido", -50000
+        )
+    )
+
+
+    reserva1 = Reserva(
+        "R001", cliente1, alojamiento, 3
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 8: Crear reserva",
+        lambda: gestor.agregar_reserva(reserva1)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 9: Confirmar reserva",
+        reserva1.confirmar
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 10: Procesar reserva con impuestos",
+        lambda: reserva1.procesar(19, 10)
+    )
+
+    reserva2 = Reserva(
+        "R002", cliente2, transporte, 20
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 11: Crear y agregar segunda reserva",
+        lambda: gestor.agregar_reserva(reserva2)
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 12: Procesar reserva sin confirmar",
+        reserva2.procesar
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 13: Cancelar reserva procesada",
+        reserva1.cancelar
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 14: Crear reserva con duración inválida",
+        lambda: Reserva(
+            "R003", cliente1, alimentacion, -5
+        )
+    )
+
+    transporte.disponible = False
+
+    reserva3 = Reserva(
+        "R004", cliente1, transporte, 10
+    )
+
+    ejecutar_operacion(
+        "OPERACIÓN 15: Intentar confirmar servicio no disponible",
+        reserva3.confirmar
+    )
+
+
+    print("\n--- RESULTADOS DE LOS SERVICIOS ---")
+
+    servicios = [
+        alojamiento,
+        transporte,
+        alimentacion
+    ]
+
+    for servicio in servicios:
+
+        try:
+            print(servicio.describir_servicio())
+
+            print(
+                "Costo:",
+                servicio.calcular_costo(2, 19, 5)
+            )
+
+        except SistemaError as error:
+            logger.error("Error calculando servicio: %s", error)
+            print("Error:", error)
+
+    # INFORMACIÓN FINAL
+
+    print("\n" + "=" * 55)
+    print("CLIENTES REGISTRADOS")
+    print("=" * 55)
+
+    gestor.mostrar_clientes()
+
+    print("\nSERVICIOS REGISTRADOS")
+    gestor.mostrar_servicios()
+
+    print("\nRESERVAS REGISTRADAS")
+    gestor.mostrar_reservas()
+
+    print("\nSistema finalizado sin detenerse por los errores.")
+    print("Revisa el archivo sistema.log para consultar los eventos.")
+
+
+if __name__ == "__main__":
+
+    try:
+        main()
+
+    except Exception as error:
+        logger.critical(
+            "Error crítico en la aplicación: %s",
+            error,
+            exc_info=True
+        )
+
+        print("Se presentó un error crítico:", error)
+
+    finally:
+        print("\nCierre de ejecución del programa.")
